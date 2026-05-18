@@ -7,19 +7,58 @@ export interface OneBotNode {
   data: { name: string; uin: string; content: any }
 }
 
+/** satori h() 元素 → OneBot 11 消息段数组 */
+function toOnebotSegments(content: any): any[] {
+  const out: any[] = []
+  const visit = (node: any) => {
+    if (node == null) return
+    if (typeof node === 'string') {
+      if (node) out.push({ type: 'text', data: { text: node } })
+      return
+    }
+    if (Array.isArray(node)) { node.forEach(visit); return }
+    const type = node.type
+    const attrs = node.attrs || {}
+    const children = node.children || []
+    if (type === 'text') {
+      if (attrs.content) out.push({ type: 'text', data: { text: attrs.content } })
+      children.forEach(visit)
+    } else if (type === 'image' || type === 'img') {
+      const url = attrs.src || attrs.url
+      if (url) out.push({ type: 'image', data: { file: url, url } })
+    } else if (type === 'at') {
+      out.push({ type: 'at', data: { qq: attrs.id ?? attrs.type ?? 'all' } })
+    } else if (type === 'face') {
+      out.push({ type: 'face', data: { id: attrs.id } })
+    } else if (type === 'message' || !type) {
+      children.forEach(visit)
+    } else {
+      // 其它未知节点：尝试递归子元素
+      children.forEach(visit)
+    }
+  }
+  visit(content)
+  // 合并相邻 text
+  const merged: any[] = []
+  for (const seg of out) {
+    if (seg.type === 'text' && merged.length && merged[merged.length - 1].type === 'text') {
+      merged[merged.length - 1].data.text += seg.data.text
+    } else merged.push(seg)
+  }
+  return merged
+}
+
 export function buildNodes(items: any[], botName: string, botUin: string): OneBotNode[] {
   return items.map(content => ({
     type: 'node',
-    data: { name: botName, uin: botUin, content },
+    data: { name: botName, uin: botUin, content: toOnebotSegments(content) },
   }))
 }
 
 /**
- * 通过 adapter-onebot 的 bot.internal 调用 OneBot 11 标准 API:
+ * 通过 adapter-onebot 的 bot.internal 调用 OneBot 11 标准 API
  *   send_group_forward_msg / send_private_forward_msg
- *
- * adapter-onebot 自动支持 ws / ws-reverse / http，所有方法都通过 bot.internal 暴露。
- * 节点过多时分批发送（默认 80 一批）。
+ * 节点 content 已转为 OneBot 段数组。兼容 ws / ws-reverse / http。
  */
 export async function sendForward(session: Session, nodes: OneBotNode[], batchSize = 80): Promise<boolean> {
   if (session.platform !== 'onebot') {
@@ -31,14 +70,22 @@ export async function sendForward(session: Session, nodes: OneBotNode[], batchSi
     logger.warn('bot.internal 不可用，请检查 adapter-onebot 是否已连接')
     return false
   }
-  if (bot.status && bot.status !== 1 && bot.status !== 'online') {
-    // koishi: 1 = online；尽量兼容字符串状态
-    logger.warn(`bot 未在线 (status=${bot.status})，请等待 adapter-onebot 连接完成后重试`)
-  }
 
-  const batches: OneBotNode[][] = []
-  for (let i = 0; i < nodes.length; i += batchSize) {
-    batches.push(nodes.slice(i, i + batchSize))
+  // 转换：每个节点的 content（可能是 h() 元素）→ OneBot 段数组
+  const normalized = nodes.map(n => ({
+    type: 'node' as const,
+    data: {
+      name: n.data.name,
+      uin: n.data.uin,
+      content: Array.isArray(n.data.content) && n.data.content[0]?.type && n.data.content[0]?.data
+        ? n.data.content // 已经是 OneBot 段
+        : toOnebotSegments(n.data.content),
+    },
+  }))
+
+  const batches: typeof normalized[] = []
+  for (let i = 0; i < normalized.length; i += batchSize) {
+    batches.push(normalized.slice(i, i + batchSize))
   }
 
   try {
@@ -52,12 +99,7 @@ export async function sendForward(session: Session, nodes: OneBotNode[], batchSi
     return true
   } catch (e: any) {
     logger.warn(`sendGroupForwardMsg 失败: ${e?.message || e}`)
-    if (/this\._request is not a function/.test(String(e?.message))) {
-      logger.warn('提示：该错误来自 adapter-onebot 内部，常见于 bot 尚未完全连接或 adapter 版本较老。请：')
-      logger.warn('  1) 在 Koishi 控制台确认 adapter-onebot 状态为"运行中"且已连接')
-      logger.warn('  2) 升级 adapter-onebot 到最新版本')
-      logger.warn('  3) 重启 Koishi 进程（热重载有时无法重新初始化反向 ws 连接）')
-    }
     return false
   }
 }
+
