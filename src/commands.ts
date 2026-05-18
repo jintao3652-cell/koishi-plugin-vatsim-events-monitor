@@ -1,7 +1,7 @@
 import { Context, h } from 'koishi'
 import type { EventService } from './service'
 import type { Config } from './config'
-import { sendForward } from './forward'
+import { sendForwardItems } from './forward'
 
 const HELP = `📘 VATSIM 活动机器人使用说明（仅支持 OneBot 平台）
 
@@ -31,18 +31,9 @@ async function sendEventList(
   const botName = session.bot.user?.name || 'VATSIM Events'
   const botUin = String(session.selfId)
   const contents = await Promise.all(events.map(ev => service.renderCard(ev, translate)))
-  const nodes = contents.map(content => ({
-    type: 'node' as const,
-    data: { name: botName, uin: botUin, content },
-  }))
-  const ok = await sendForward(session, nodes)
-  if (!ok) {
-    return '❌ 合并转发失败。请检查：\n' +
-      '  1) Koishi 控制台 → adapter-onebot 状态为"运行中"\n' +
-      '  2) adapter-onebot 已升到最新版（市场点更新）\n' +
-      '  3) ws 反向连接已建立（OneBot 实现连上 koishi 的 ws 端口）\n' +
-      '  4) 完全重启 Koishi 进程（热重载有时无法重新初始化反向 ws）'
-  }
+  const items = contents.map(content => ({ message: content as any, name: botName, uin: botUin }))
+  const ok = await sendForwardItems(session, items, { mergedOnly: false })
+  if (!ok) return '❌ 合并转发失败，请检查 OneBot 实现是否支持 send_group_forward_msg。'
 }
 
 export function registerCommands(ctx: Context, service: EventService, config: Config) {
