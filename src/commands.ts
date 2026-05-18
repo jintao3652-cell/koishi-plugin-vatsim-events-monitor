@@ -17,22 +17,32 @@ const HELP = `📘 VATSIM 活动机器人使用说明（仅支持 OneBot 平台�
   - channelMode 选择 whitelist 或 all
   - allowedChannels 列表里点 ➕ 添加群号`
 
+async function safeSend(session: any, content: any) {
+  try { await session.send(content) } catch (e: any) {
+    // adapter 异常时静默忽略提示词，主体合并转发会走 HTTP 直连路径
+  }
+}
+
 async function sendEventList(
-  ctx: Context, service: EventService, session: any,
+  ctx: Context, service: EventService, session: any, config: Config,
   events: any[], translate: boolean,
 ): Promise<string | undefined> {
   if (session.platform !== 'onebot') {
     return '⚠️ 本插件仅支持 OneBot 平台。'
   }
   const botName = session.bot.user?.name || 'VATSIM Events'
-  const botUin = String(session.selfId)
+  const botUin = config.onebotSelfId || String(session.selfId)
   const contents = await Promise.all(events.map(ev => service.renderCard(ev, translate)))
   const nodes = contents.map(content => ({
     type: 'node' as const,
     data: { name: botName, uin: botUin, content },
   }))
-  const ok = await sendForward(session, nodes)
-  if (!ok) return '❌ 合并转发失败，请检查 OneBot 实现是否支持 send_group_forward_msg。'
+  const ok = await sendForward(session, nodes, ctx, config)
+  if (!ok) {
+    return config.onebotHttpUrl
+      ? '❌ 合并转发失败：HTTP 直连返回错误，请检查 onebotHttpUrl / onebotAccessToken。'
+      : '❌ 合并转发失败：可能是 adapter-onebot 异常，请在配置中填 onebotHttpUrl 走 HTTP 直连。'
+  }
 }
 
 export function registerCommands(ctx: Context, service: EventService, config: Config) {
@@ -48,7 +58,7 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
       if (!session) return
       if (session.platform !== 'onebot') return '⚠️ 本插件仅支持 OneBot 平台。'
 
-      await session.send(`🔍 正在查询最近 ${days} 天的活动，请稍候…`)
+      await safeSend(session, `🔍 正在查询最近 ${days} 天的活动，请稍候…`)
 
       let events = await service.listRecentWithinDays(days)
       if (options.source) events = events.filter(e => e.source === options.source)
@@ -58,7 +68,7 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
         ? false
         : (options.translate ?? service.translator.enabled)
 
-      return sendEventList(ctx, service, session, events, translate)
+      return sendEventList(ctx, service, session, config, events, translate)
     })
 
   ctx.command('vatprc', 'VATPRC 活动查询')
@@ -70,7 +80,7 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
       if (!session) return
       if (session.platform !== 'onebot') return '⚠️ 本插件仅支持 OneBot 平台。'
 
-      await session.send('🔍 正在查询 VATPRC 活动，请稍候…')
+      await safeSend(session, '🔍 正在查询 VATPRC 活动，请稍候…')
 
       const events = await service.listAllUpcoming('vatprc')
       if (!events.length) return '当前没有即将进行的 VATPRC 活动。'
@@ -79,7 +89,7 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
         ? false
         : (options.translate ?? service.translator.enabled)
 
-      return sendEventList(ctx, service, session, events, translate)
+      return sendEventList(ctx, service, session, config, events, translate)
     })
 
   root.subcommand('.订阅', '本频道订阅活动通知（新活动 / 开始前30分钟 / 结束）')

@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-vatsim-events-monitor",
   "description": "VATSIM & VATPRC 活动监控、订阅、定时提醒、NVIDIA 翻译",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
