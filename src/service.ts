@@ -154,7 +154,9 @@ export class EventService {
         for (const m of minutes) {
           const triggerAt = +ev.startTime - m * 60_000
           if (now >= triggerAt && now < triggerAt + intervalMs) {
-            await this.sendIfNotLogged(ev, ch, `remind-${m}` as NotifyType, this.renderRemind(ev, m, ch))
+            const ats = await this.buildSubAts(ch.platform, ch.selfId, ch.channelId, ch.guildId)
+            const msg = this.renderRemind(ev, m, ch, ats)
+            await this.sendIfNotLogged(ev, ch, `remind-${m}` as NotifyType, msg)
           }
         }
       }
@@ -163,7 +165,6 @@ export class EventService {
 
   private async checkStartAndEnd() {
     const now = new Date()
-    // 标记 ongoing
     const toStart = await this.ctx.database.get('vatsim_event', {
       status: 'pending',
       startTime: { $lte: now },
@@ -173,12 +174,12 @@ export class EventService {
       if (this.config.notifyStart) {
         const channels = await this.ctx.database.get('vatsim_notify_channel', { enableStart: true })
         for (const ch of channels) {
-          await this.sendIfNotLogged(ev, ch, 'start', this.renderStart(ev, ch))
+          const ats = await this.buildSubAts(ch.platform, ch.selfId, ch.channelId, ch.guildId)
+          await this.sendIfNotLogged(ev, ch, 'start', this.renderStart(ev, ch, ats))
         }
       }
     }
 
-    // 标记 ended
     const toEnd = await this.ctx.database.get('vatsim_event', {
       status: { $in: ['pending', 'ongoing'] as any },
       endTime: { $lte: now },
@@ -194,45 +195,62 @@ export class EventService {
     }
   }
 
+  /**
+   * 构造某个频道内"仍在群里"的订阅者 @ 列表。
+   * 只查询 channelId/guildId 对应该群的订阅，并通过 OneBot get_group_member_info 验证用户仍是成员。
+   */
+  private async buildSubAts(platform: string, selfId: string, channelId: string, guildId: string): Promise<any[]> {
+    if (platform !== 'onebot') return []
+    const subs = await this.ctx.database.get('vatsim_subscription', {
+      platform,
+      channelId,
+      atMe: true,
+    })
+    if (!subs.length) return []
+    const bot: any = this.ctx.bots.find(b => b.platform === platform && b.selfId === selfId)
+      ?? this.ctx.bots.find(b => b.platform === platform)
+    if (!bot) return []
+
+    const groupId = guildId || channelId
+    const result: any[] = []
+    for (const s of subs) {
+      try {
+        const info = await this.callOneBot(bot, 'get_group_member_info', { group_id: Number(groupId) || groupId, user_id: Number(s.userId) || s.userId, no_cache: false })
+        if (info) result.push(h.at(s.userId))
+      } catch (e: any) {
+        this.vlog(`skip @${s.userId} in ${channelId}: not in group (${e?.message || e})`)
+      }
+    }
+    return result
+  }
+
+  private async callOneBot(bot: any, action: string, params: any): Promise<any> {
+    const method = action.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+    const candidates = [
+      bot?.[`$${action}`], bot?.[action], bot?.[method],
+      bot?.internal?.[`$${action}`], bot?.internal?.[action], bot?.internal?.[method],
+    ].filter(fn => typeof fn === 'function')
+    let lastErr: any
+    for (const fn of candidates) {
+      try { return await fn.call(bot.internal ?? bot, params) } catch (e) { lastErr = e }
+    }
+    if (lastErr) throw lastErr
+    throw new Error(`OneBot action not available: ${action}`)
+  }
+
   private async broadcastNew(ev: VatsimEvent) {
     const channels = await this.ctx.database.get('vatsim_notify_channel', { enableNew: true })
-    const msg = this.renderNew(ev)
     for (const ch of channels) {
+      const ats = await this.buildSubAts(ch.platform, ch.selfId, ch.channelId, ch.guildId)
+      const msg = this.renderNew(ev, ats)
       await this.sendIfNotLogged(ev, ch, 'new', msg)
     }
-    // 订阅匹配
-    const subs = await this.ctx.database.get('vatsim_subscription', {})
-    const grouped = new Map<string, VatsimSubscription[]>()
-    for (const s of subs) {
-      if (!this.matchSub(ev, s)) continue
-      const key = `${s.platform}|${s.selfId}|${s.channelId}`
-      if (!grouped.has(key)) grouped.set(key, [])
-      grouped.get(key)!.push(s)
-    }
-    for (const list of grouped.values()) {
-      const first = list[0]
-      if (first.platform !== 'onebot') continue
-      if (!this.isChannelAllowed(first.channelId, first.guildId)) continue
-      const atSeg = list.filter(s => s.atMe).map(s => h.at(s.userId))
-      const content: any[] = [...atSeg, atSeg.length ? ' ' : '', msg]
-      await this.sendTo(first.platform, first.selfId, first.channelId, first.guildId, content, ev.id, `new`)
-    }
   }
 
-  private matchSub(ev: VatsimEvent, sub: VatsimSubscription): boolean {
-    const kw = sub.keyword?.trim().toLowerCase()
-    if (!kw) return true
-    if (ev.name.toLowerCase().includes(kw)) return true
-    if (ev.airports.some(a => a.toLowerCase().includes(kw))) return true
-    if (ev.organisers.some(o =>
-      [o.division, o.region, o.subdivision].filter(Boolean).some(x => x!.toLowerCase().includes(kw))
-    )) return true
-    return false
-  }
-
-  private renderNew(ev: VatsimEvent) {
+  private renderNew(ev: VatsimEvent, ats: any[] = []) {
     const banner = ev.banner ? h.image(ev.banner) : ''
     return h('message', {},
+      ...ats, ats.length ? ' ' : '',
       banner,
       `🆕 [${ev.source.toUpperCase()}] ${ev.name}\n`,
       `🕐 ${this.fmt(ev.startTime)} - ${this.fmt(ev.endTime)}\n`,
@@ -241,10 +259,11 @@ export class EventService {
     )
   }
 
-  private renderRemind(ev: VatsimEvent, minutes: number, ch: VatsimNotifyChannel) {
+  private renderRemind(ev: VatsimEvent, minutes: number, ch: VatsimNotifyChannel, ats: any[] = []) {
     const at = ch.atAll ? h('at', { type: 'all' }) : ''
     return h('message', {},
       at, at ? ' ' : '',
+      ...ats, ats.length ? ' ' : '',
       `⏰ ${minutes} 分钟后开始：${ev.name}\n`,
       `🕐 ${this.fmt(ev.startTime)}\n`,
       ev.airports.length ? `✈️ ${ev.airports.join(', ')}\n` : '',
@@ -252,10 +271,11 @@ export class EventService {
     )
   }
 
-  private renderStart(ev: VatsimEvent, ch: VatsimNotifyChannel) {
+  private renderStart(ev: VatsimEvent, ch: VatsimNotifyChannel, ats: any[] = []) {
     const at = ch.atAll ? h('at', { type: 'all' }) : ''
     return h('message', {},
       at, at ? ' ' : '',
+      ...ats, ats.length ? ' ' : '',
       `🚀 活动开始：${ev.name}\n`,
       `🕐 至 ${this.fmt(ev.endTime)}\n`,
       ev.airports.length ? `✈️ ${ev.airports.join(', ')}\n` : '',

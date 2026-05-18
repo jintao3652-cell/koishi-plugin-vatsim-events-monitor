@@ -83,11 +83,13 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
       return sendEventList(ctx, service, session, events, translate)
     })
 
-  root.subcommand('.订阅', '本频道订阅活动通知（新活动 / 开始前30分钟 / 结束）')
+  root.subcommand('.订阅', '订阅本群活动提醒（@ 你）')
     .alias('vatsim.subscribe')
     .action(async ({ session }) => {
       if (!session?.channelId) return '请在群内使用此指令。'
       if (session.platform !== 'onebot') return '⚠️ 本插件仅支持 OneBot 平台。'
+
+      // 1) 把当前群登记为通知频道（如未登记）
       await ctx.database.upsert('vatsim_notify_channel', [{
         platform: session.platform,
         channelId: session.channelId,
@@ -99,18 +101,39 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
         remindMinutes: [30],
         atAll: false,
       }])
-      return '✅ 已订阅本群：新活动通知 / 开始前 30 分钟提醒 / 结束提醒。'
+
+      // 2) 把当前用户登记为本群的订阅者
+      const existing = await ctx.database.get('vatsim_subscription', {
+        platform: session.platform,
+        channelId: session.channelId,
+        userId: session.userId,
+      })
+      if (existing.length) {
+        return '✅ 你已订阅本群活动提醒。新活动 / 开始前30分钟 / 结束 时会 @ 你。'
+      }
+      await ctx.database.create('vatsim_subscription', {
+        platform: session.platform,
+        selfId: session.selfId,
+        userId: session.userId,
+        channelId: session.channelId,
+        guildId: session.guildId || '',
+        keyword: '',
+        atMe: true,
+        createdAt: new Date(),
+      })
+      return '✅ 已订阅！新活动 / 开始前30分钟 / 结束 时会 @ 你（前提是你仍在本群）。'
     })
 
-  root.subcommand('.取消订阅', '关闭本频道订阅')
+  root.subcommand('.取消订阅', '取消你在本群的订阅')
     .alias('vatsim.unsubscribe')
     .action(async ({ session }) => {
       if (!session?.channelId) return '请在群内使用。'
-      await ctx.database.remove('vatsim_notify_channel', {
+      const removed = await ctx.database.remove('vatsim_subscription', {
         platform: session.platform,
         channelId: session.channelId,
+        userId: session.userId,
       })
-      return '✅ 已取消本群订阅。'
+      return '✅ 已取消你在本群的订阅。'
     })
 
   root.subcommand('.model [id:string]', '查看/切换 NVIDIA 翻译模型')
