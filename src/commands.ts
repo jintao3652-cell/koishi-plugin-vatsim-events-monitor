@@ -3,21 +3,40 @@ import type { EventService } from './service'
 import type { Config } from './config'
 import { sendForward } from './forward'
 
-const HELP = `📘 VATSIM 活动机器人使用说明
+const HELP = `📘 VATSIM 活动机器人使用说明（仅支持 OneBot 平台）
 
 • vatsim                  查看本帮助
-• vatsim 最近活动 [天数]   列出近 N 天活动（默认 7，OneBot 合并转发，一活动一条）
+• vatsim 最近活动 [天数]   列出近 N 天活动（默认 7，合并转发，一活动一条）
+• vatprc 活动查询          列出所有 VATPRC 即将进行的活动（合并转发）
 • vatsim 订阅              本频道订阅：新活动 / 开始前 30 分钟 / 结束 提醒
 • vatsim 取消订阅          关闭本频道订阅
 • vatsim.model [id|-l]     查看/切换 NVIDIA 翻译模型，-l 列出可用模型
 
-提示：在最近活动后加 -t 可启用 NVIDIA 翻译简介。
+提示：在最近活动 / 活动查询后加 -t 可启用 NVIDIA 翻译简介。
 推送范围：在 Koishi 控制台 → 插件配置 → vatsim-events-monitor 内
   - channelMode 选择 whitelist 或 all
   - allowedChannels 列表里点 ➕ 添加群号`
 
+async function sendEventList(
+  ctx: Context, service: EventService, session: any,
+  events: any[], translate: boolean,
+): Promise<string | undefined> {
+  if (session.platform !== 'onebot') {
+    return '⚠️ 本插件仅支持 OneBot 平台。'
+  }
+  const botName = session.bot.user?.name || 'VATSIM Events'
+  const botUin = String(session.selfId)
+  const contents = await Promise.all(events.map(ev => service.renderCard(ev, translate)))
+  const nodes = contents.map(content => ({
+    type: 'node' as const,
+    data: { name: botName, uin: botUin, content },
+  }))
+  const ok = await sendForward(session, nodes)
+  if (!ok) return '❌ 合并转发失败，请检查 OneBot 实现是否支持 send_group_forward_msg。'
+}
+
 export function registerCommands(ctx: Context, service: EventService, config: Config) {
-  const root = ctx.command('vatsim', 'VATSIM/VATPRC 活动机器人')
+  const root = ctx.command('vatsim', 'VATSIM 活动机器人（OneBot）')
     .action(() => HELP)
 
   root.subcommand('.最近活动 [days:posint]', '列出最近 N 天活动（默认 7）')
@@ -27,6 +46,10 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
     .option('source', '-s <src:string> vatsim|vatprc')
     .action(async ({ session, options }, days = 7) => {
       if (!session) return
+      if (session.platform !== 'onebot') return '⚠️ 本插件仅支持 OneBot 平台。'
+
+      await session.send(`🔍 正在查询最近 ${days} 天的活动，请稍候…`)
+
       let events = await service.listRecentWithinDays(days)
       if (options.source) events = events.filter(e => e.source === options.source)
       if (!events.length) return `最近 ${days} 天内暂无活动。`
@@ -35,26 +58,35 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
         ? false
         : (options.translate ?? service.translator.enabled)
 
-      if (session.platform === 'onebot') {
-        const botName = session.bot.user?.name || 'VATSIM Events'
-        const botUin = String(session.selfId)
-        const contents = await Promise.all(events.map(ev => service.renderCard(ev, translate)))
-        const nodes = events.map((_, i) => ({
-          type: 'node' as const,
-          data: { name: botName, uin: botUin, content: contents[i] },
-        }))
-        const ok = await sendForward(session, nodes)
-        if (ok) return
-      }
-      for (const ev of events) {
-        await session.send(await service.renderCard(ev, translate))
-      }
+      return sendEventList(ctx, service, session, events, translate)
+    })
+
+  ctx.command('vatprc', 'VATPRC 活动查询')
+    .subcommand('.活动查询', '列出所有 VATPRC 即将进行的活动')
+    .alias('vatprc.events')
+    .option('translate', '-t 强制翻译简介')
+    .option('noTranslate', '-T 关闭翻译')
+    .action(async ({ session, options }) => {
+      if (!session) return
+      if (session.platform !== 'onebot') return '⚠️ 本插件仅支持 OneBot 平台。'
+
+      await session.send('🔍 正在查询 VATPRC 活动，请稍候…')
+
+      const events = await service.listAllUpcoming('vatprc')
+      if (!events.length) return '当前没有即将进行的 VATPRC 活动。'
+
+      const translate = options.noTranslate
+        ? false
+        : (options.translate ?? service.translator.enabled)
+
+      return sendEventList(ctx, service, session, events, translate)
     })
 
   root.subcommand('.订阅', '本频道订阅活动通知（新活动 / 开始前30分钟 / 结束）')
     .alias('vatsim.subscribe')
     .action(async ({ session }) => {
-      if (!session?.channelId) return '请在频道 / 群内使用此指令。'
+      if (!session?.channelId) return '请在群内使用此指令。'
+      if (session.platform !== 'onebot') return '⚠️ 本插件仅支持 OneBot 平台。'
       await ctx.database.upsert('vatsim_notify_channel', [{
         platform: session.platform,
         channelId: session.channelId,
@@ -66,18 +98,18 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
         remindMinutes: [30],
         atAll: false,
       }])
-      return '✅ 已订阅本频道：新活动通知 / 开始前 30 分钟提醒 / 结束提醒。'
+      return '✅ 已订阅本群：新活动通知 / 开始前 30 分钟提醒 / 结束提醒。'
     })
 
   root.subcommand('.取消订阅', '关闭本频道订阅')
     .alias('vatsim.unsubscribe')
     .action(async ({ session }) => {
-      if (!session?.channelId) return '请在频道 / 群内使用。'
+      if (!session?.channelId) return '请在群内使用。'
       await ctx.database.remove('vatsim_notify_channel', {
         platform: session.platform,
         channelId: session.channelId,
       })
-      return '✅ 已取消本频道订阅。'
+      return '✅ 已取消本群订阅。'
     })
 
   root.subcommand('.model [id:string]', '查看/切换 NVIDIA 翻译模型')

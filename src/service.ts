@@ -211,6 +211,7 @@ export class EventService {
     }
     for (const list of grouped.values()) {
       const first = list[0]
+      if (first.platform !== 'onebot') continue
       if (!this.isChannelAllowed(first.channelId, first.guildId)) continue
       const atSeg = list.filter(s => s.atMe).map(s => h.at(s.userId))
       const content: any[] = [...atSeg, atSeg.length ? ' ' : '', msg]
@@ -280,6 +281,10 @@ export class EventService {
   }
 
   private async sendIfNotLogged(ev: VatsimEvent, ch: VatsimNotifyChannel, type: NotifyType, content: any) {
+    if (ch.platform !== 'onebot') {
+      this.vlog(`skip ${type} ${ch.platform}:${ch.channelId}: non-onebot platform`)
+      return
+    }
     if (!this.isChannelAllowed(ch.channelId, ch.guildId)) {
       this.vlog(`skip ${type} ${ch.channelId}: not in whitelist`)
       return
@@ -326,6 +331,15 @@ export class EventService {
       endTime: { $gte: now },
       startTime: { $lte: future },
     })
+    all.sort((a, b) => +a.startTime - +b.startTime)
+    return all
+  }
+
+  async listAllUpcoming(source?: 'vatsim' | 'vatprc'): Promise<VatsimEvent[]> {
+    const now = new Date()
+    const query: any = { endTime: { $gte: now } }
+    if (source) query.source = source
+    const all = await this.ctx.database.get('vatsim_event', query)
     all.sort((a, b) => +a.startTime - +b.startTime)
     return all
   }
