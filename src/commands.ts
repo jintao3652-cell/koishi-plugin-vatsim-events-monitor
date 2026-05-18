@@ -18,30 +18,30 @@ const HELP = `📘 VATSIM 活动机器人使用说明（仅支持 OneBot 平台�
   - allowedChannels 列表里点 ➕ 添加群号`
 
 async function safeSend(session: any, content: any) {
-  try { await session.send(content) } catch (e: any) {
-    // adapter 异常时静默忽略提示词，主体合并转发会走 HTTP 直连路径
-  }
+  try { await session.send(content) } catch { /* adapter 偶发异常时静默 */ }
 }
 
 async function sendEventList(
-  ctx: Context, service: EventService, session: any, config: Config,
+  ctx: Context, service: EventService, session: any,
   events: any[], translate: boolean,
 ): Promise<string | undefined> {
   if (session.platform !== 'onebot') {
     return '⚠️ 本插件仅支持 OneBot 平台。'
   }
   const botName = session.bot.user?.name || 'VATSIM Events'
-  const botUin = config.onebotSelfId || String(session.selfId)
+  const botUin = String(session.selfId)
   const contents = await Promise.all(events.map(ev => service.renderCard(ev, translate)))
   const nodes = contents.map(content => ({
     type: 'node' as const,
     data: { name: botName, uin: botUin, content },
   }))
-  const ok = await sendForward(session, nodes, ctx, config)
+  const ok = await sendForward(session, nodes)
   if (!ok) {
-    return config.onebotHttpUrl
-      ? '❌ 合并转发失败：HTTP 直连返回错误，请检查 onebotHttpUrl / onebotAccessToken。'
-      : '❌ 合并转发失败：可能是 adapter-onebot 异常，请在配置中填 onebotHttpUrl 走 HTTP 直连。'
+    return '❌ 合并转发失败。请检查：\n' +
+      '  1) Koishi 控制台 → adapter-onebot 状态为"运行中"\n' +
+      '  2) adapter-onebot 已升到最新版（市场点更新）\n' +
+      '  3) ws 反向连接已建立（OneBot 实现连上 koishi 的 ws 端口）\n' +
+      '  4) 完全重启 Koishi 进程（热重载有时无法重新初始化反向 ws）'
   }
 }
 
@@ -68,7 +68,7 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
         ? false
         : (options.translate ?? service.translator.enabled)
 
-      return sendEventList(ctx, service, session, config, events, translate)
+      return sendEventList(ctx, service, session, events, translate)
     })
 
   ctx.command('vatprc', 'VATPRC 活动查询')
@@ -89,7 +89,7 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
         ? false
         : (options.translate ?? service.translator.enabled)
 
-      return sendEventList(ctx, service, session, config, events, translate)
+      return sendEventList(ctx, service, session, events, translate)
     })
 
   root.subcommand('.订阅', '本频道订阅活动通知（新活动 / 开始前30分钟 / 结束）')

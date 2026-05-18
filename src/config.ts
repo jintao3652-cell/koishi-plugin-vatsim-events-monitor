@@ -20,10 +20,6 @@ export interface Config {
   verboseLog: boolean
   allowedChannels: string[]
   channelMode: 'whitelist' | 'all'
-  // OneBot 直连（绕开适配器，调用 OneBot HTTP API 发送合并转发）
-  onebotHttpUrl: string
-  onebotAccessToken: string
-  onebotSelfId: string
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -56,10 +52,4 @@ export const Config: Schema<Config> = Schema.object({
     .role('table')
     .default([])
     .description('允许推送的群聊 / 频道 id 列表（仅 whitelist 模式生效）。点 ➕ 添加一行，输入群号即可。OneBot QQ 群直接填群号，例如 123456789。'),
-  onebotHttpUrl: Schema.string().default('')
-    .description('【可选】OneBot HTTP API 地址，例如 http://127.0.0.1:3000。设置后合并转发改为直接调用此 HTTP 接口，绕过 adapter-onebot（用于 adapter 异常时的回退）。留空则走适配器。'),
-  onebotAccessToken: Schema.string().role('secret').default('')
-    .description('OneBot HTTP access_token（可选），按你的 OneBot 实现配置。'),
-  onebotSelfId: Schema.string().default('')
-    .description('用于合并转发节点 uin（发送者显示头像/昵称的 QQ 号），留空则使用 bot.selfId。'),
 })
