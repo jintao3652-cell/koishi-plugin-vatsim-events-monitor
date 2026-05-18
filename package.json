@@ -1,0 +1,45 @@
+{
+  "name": "koishi-plugin-vatsim-events-monitor",
+  "description": "VATSIM & VATPRC 活动监控、订阅、定时提醒、NVIDIA 翻译",
+  "version": "1.0.0",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "readme.md"
+  ],
+  "license": "MIT",
+  "author": "bot_actions",
+  "homepage": "https://github.com/jintao3652-cell/koishi-plugin-vatsim-events-monitor#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jintao3652-cell/koishi-plugin-vatsim-events-monitor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jintao3652-cell/koishi-plugin-vatsim-events-monitor/issues"
+  },
+  "keywords": [
+    "chatbot",
+    "koishi",
+    "plugin",
+    "vatsim",
+    "vatprc",
+    "events",
+    "aviation",
+    "atc"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "koishi": "^4.18.7"
+  },
+  "dependencies": {
+    "dayjs": "^1.11.10"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}
