@@ -211,6 +211,7 @@ export class EventService {
     }
     for (const list of grouped.values()) {
       const first = list[0]
+      if (!this.isChannelAllowed(first.channelId, first.guildId)) continue
       const atSeg = list.filter(s => s.atMe).map(s => h.at(s.userId))
       const content: any[] = [...atSeg, atSeg.length ? ' ' : '', msg]
       await this.sendTo(first.platform, first.selfId, first.channelId, first.guildId, content, ev.id, `new`)
@@ -279,11 +280,22 @@ export class EventService {
   }
 
   private async sendIfNotLogged(ev: VatsimEvent, ch: VatsimNotifyChannel, type: NotifyType, content: any) {
+    if (!this.isChannelAllowed(ch.channelId, ch.guildId)) {
+      this.vlog(`skip ${type} ${ch.channelId}: not in whitelist`)
+      return
+    }
     const existed = await this.ctx.database.get('vatsim_notify_log', {
       eventId: ev.id, channelId: ch.channelId, type,
     })
     if (existed.length) return
     await this.sendTo(ch.platform, ch.selfId, ch.channelId, ch.guildId, content, ev.id, type)
+  }
+
+  isChannelAllowed(channelId: string, guildId?: string): boolean {
+    if (this.config.channelMode === 'all') return true
+    const list = this.config.allowedChannels || []
+    if (!list.length) return false
+    return list.includes(channelId) || (guildId ? list.includes(guildId) : false)
   }
 
   private async sendTo(

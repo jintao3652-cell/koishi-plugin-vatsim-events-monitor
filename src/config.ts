@@ -18,6 +18,8 @@ export interface Config {
   nvidiaApiBase: string
   nvidiaModel: string
   verboseLog: boolean
+  allowedChannels: string[]
+  channelMode: 'whitelist' | 'all'
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -42,4 +44,12 @@ export const Config: Schema<Config> = Schema.object({
   nvidiaModel: Schema.string().default('nvidia/riva-translate-4b-instruct-v1.1')
     .description('翻译模型 id。可使用指令 `vatsim.model -l` 列出可用模型后填入。'),
   verboseLog: Schema.boolean().default(false).description('详细日志：打印 API 请求 / 翻译输入输出 / 轮询结果（调试用）'),
+  channelMode: Schema.union([
+    Schema.const('whitelist').description('白名单模式：仅向下方列表中的群推送'),
+    Schema.const('all').description('全部模式：向所有已使用 vatsim.订阅 的频道推送'),
+  ]).default('whitelist').description('推送范围模式'),
+  allowedChannels: Schema.array(Schema.string())
+    .role('table')
+    .default([])
+    .description('允许推送的群聊 / 频道 id 列表（仅 whitelist 模式生效）。点 ➕ 添加一行，输入群号即可。OneBot QQ 群直接填群号，例如 123456789。'),
 })

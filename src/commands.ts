@@ -11,7 +11,10 @@ const HELP = `📘 VATSIM 活动机器人使用说明
 • vatsim 取消订阅          关闭本频道订阅
 • vatsim.model [id|-l]     查看/切换 NVIDIA 翻译模型，-l 列出可用模型
 
-提示：在最近活动后加 -t 可启用 NVIDIA 翻译简介。`
+提示：在最近活动后加 -t 可启用 NVIDIA 翻译简介。
+推送范围：在 Koishi 控制台 → 插件配置 → vatsim-events-monitor 内
+  - channelMode 选择 whitelist 或 all
+  - allowedChannels 列表里点 ➕ 添加群号`
 
 export function registerCommands(ctx: Context, service: EventService, config: Config) {
   const root = ctx.command('vatsim', 'VATSIM/VATPRC 活动机器人')
