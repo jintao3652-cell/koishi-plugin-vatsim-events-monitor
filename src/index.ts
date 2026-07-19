@@ -1,9 +1,9 @@
 import { Context } from 'koishi'
-import { Config } from './config'
-import { defineModels } from './model'
-import { EventService } from './service'
-import { registerCommands } from './commands'
-import './types'
+import { Config } from './config.js'
+import { defineModels } from './model.js'
+import { EventService } from './service.js'
+import { registerCommands } from './commands.js'
+import './types.js'
 
 export { Config }
 export const name = 'vatsim-events-monitor'

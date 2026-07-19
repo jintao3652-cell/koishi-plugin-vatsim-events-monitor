@@ -1,7 +1,7 @@
 import { Context, h } from 'koishi'
-import type { EventService } from './service'
-import type { Config } from './config'
-import { sendForwardItems } from './forward'
+import type { EventService } from './service.js'
+import type { Config } from './config.js'
+import { sendForwardItems } from './forward.js'
 
 const HELP = `📘 VATSIM 活动机器人使用说明（仅支持 OneBot 平台）
 

@@ -1,5 +1,5 @@
 import { Context, Logger } from 'koishi'
-import type { Config } from './config'
+import type { Config } from './config.js'
 
 const logger = new Logger('vatsim-events:translate')
 

@@ -1,6 +1,6 @@
 import { Context, Logger } from 'koishi'
-import type { Config } from './config'
-import type { EventSource, NormalizedEvent, RemoteEvent } from './types'
+import type { Config } from './config.js'
+import type { EventSource, NormalizedEvent, RemoteEvent } from './types.js'
 
 const logger = new Logger('vatsim-events')
 

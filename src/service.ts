@@ -2,10 +2,10 @@ import { Context, Logger, h } from 'koishi'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
-import type { Config } from './config'
-import { EventApi } from './api'
-import { Translator } from './translator'
-import type { NormalizedEvent, NotifyType, VatsimEvent, VatsimNotifyChannel, VatsimSubscription } from './types'
+import type { Config } from './config.js'
+import { EventApi } from './api.js'
+import { Translator } from './translator.js'
+import type { NormalizedEvent, NotifyType, VatsimEvent, VatsimNotifyChannel, VatsimSubscription } from './types.js'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
