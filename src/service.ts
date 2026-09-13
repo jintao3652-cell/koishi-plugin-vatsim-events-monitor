@@ -249,13 +249,20 @@ export class EventService {
 
   private renderNew(ev: VatsimEvent, ats: any[] = []) {
     const banner = ev.banner ? h.image(ev.banner) : ''
+    const desc = stripHtml(ev.shortDescription || ev.description || '').slice(0, 200)
+    const orgList = asArray(ev.organisers).map((o: any) =>
+      [o?.region, o?.division, o?.subdivision].filter(Boolean).join('→')
+    ).filter(Boolean)
     return h('message', {},
       ...ats, ats.length ? ' ' : '',
+      `📢 有新的活动发布啦！\n`,
       banner,
       `🆕 [${ev.source.toUpperCase()}] ${ev.name}\n`,
       `🕐 ${this.fmt(ev.startTime)} - ${this.fmt(ev.endTime)}\n`,
-      ev.airports.length ? `✈️ ${ev.airports.join(', ')}\n` : '',
-      ev.link ? `🔗 ${ev.link}` : '',
+      ev.airports.length ? `✈️ 机场: ${ev.airports.join(', ')}\n` : '',
+      orgList.length ? `🏷️ 主办: ${orgList.join('；')}\n` : '',
+      ev.link ? `🔗 ${ev.link}\n` : '',
+      desc ? `\n📝 ${desc}${desc.length >= 200 ? '…' : ''}` : '',
     )
   }
 
@@ -295,8 +302,10 @@ export class EventService {
 
   private renderEnd(ev: VatsimEvent) {
     return h('message', {},
-      `🏁 活动结束：${ev.name}\n`,
-      ev.airports.length ? `✈️ ${ev.airports.join(', ')}` : '',
+      `🏁 ${ev.name} 活动结束啦！\n`,
+      `🕐 ${this.fmt(ev.startTime)} - ${this.fmt(ev.endTime)}\n`,
+      ev.airports.length ? `✈️ 机场: ${ev.airports.join(', ')}\n` : '',
+      ev.link ? `🔗 ${ev.link}` : '',
     )
   }
 
