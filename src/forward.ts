@@ -54,7 +54,21 @@ function toOneBotSegments(message: Fragment): OneBotSegment[] {
 
 function toCamelCase(s: string) { return s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()) }
 
+// adapter-onebot 的 internal 暴露了通用入口 `_get(action, params)`，可以调用协议端实现的
+// 任意接口，因此 NapCat 与 LLOneBot 共用同一套 OneBot 11 / Go-CQHTTP 的 action 与参数。
+// 仅在通用入口不可用时才退回方法名探测（旧版适配器 / 驼峰方法实现）。
 async function callOneBotApi(bot: any, action: string, params: Record<string, any>) {
+  const internal: any = bot?.internal
+  if (typeof internal?._get === 'function') return await internal._get(action, params)
+  if (typeof internal?._request === 'function') {
+    const response = await internal._request(action, params)
+    if (response && typeof response === 'object' && 'retcode' in response) {
+      if (response.retcode === 0) return response.data
+      throw new Error(`OneBot ${action} failed: retcode=${response.retcode} ${response.message || response.wording || ''}`.trim())
+    }
+    return response
+  }
+
   const method = toCamelCase(action)
   const candidates: Array<{ target: any; fn: Function }> = []
   const push = (target: any, key: string) => {
@@ -74,6 +88,51 @@ async function callOneBotApi(bot: any, action: string, params: Record<string, an
   }
   if (lastErr) throw lastErr
   throw new Error(`OneBot action not available: ${action}`)
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} 调用超时（${ms}ms）`)), ms)
+    promise.then(
+      value => { clearTimeout(timer); resolve(value) },
+      error => { clearTimeout(timer); reject(error) },
+    )
+  })
+}
+
+const FORWARD_ATTEMPT_TIMEOUT = 10000
+
+// 合并转发的尝试顺序：
+// 1. Go-CQHTTP 兼容的 `send_group_forward_msg` / `send_private_forward_msg`（NapCat 与 LLOneBot 都支持）；
+// 2. NapCat 统一的 `send_forward_msg`（参数 `message`）；
+// 3. NapCat 统一的 `send_forward_msg`（参数 `messages`）。
+// 每次尝试都带超时，避免协议端不响应未知 action 时一直等待适配器的 responseTimeout（默认 1 分钟）。
+async function callMergedForward(bot: any, session: Session, messages: OneBotForwardNode[]) {
+  const groupId = session.isDirect ? null : extractOneBotTargetId(session.guildId || session.channelId)
+  const userId = session.isDirect ? extractOneBotTargetId(session.userId || session.channelId) : null
+  const attempts: Array<[string, Record<string, any>]> = groupId
+    ? [
+      ['send_group_forward_msg', { group_id: groupId, messages }],
+      ['send_forward_msg', { message_type: 'group', group_id: groupId, message: messages }],
+      ['send_forward_msg', { message_type: 'group', group_id: groupId, messages }],
+    ]
+    : userId
+      ? [
+        ['send_private_forward_msg', { user_id: userId, messages }],
+        ['send_forward_msg', { message_type: 'private', user_id: userId, message: messages }],
+        ['send_forward_msg', { message_type: 'private', user_id: userId, messages }],
+      ]
+      : []
+  let lastErr: any
+  for (const [action, params] of attempts) {
+    try {
+      return await withTimeout(callOneBotApi(bot, action, params), FORWARD_ATTEMPT_TIMEOUT, action)
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  if (lastErr) throw lastErr
+  throw new Error('OneBot forward action not available')
 }
 
 export interface ForwardItem {
@@ -109,13 +168,13 @@ export async function sendForwardItems(
       if (session.isDirect) {
         const userId = extractOneBotTargetId(session.userId || session.channelId)
         if (userId) {
-          await callOneBotApi(bot, 'send_private_forward_msg', { user_id: userId, messages, message: messages })
+          await callMergedForward(bot, session, messages)
           return true
         }
       } else {
         const groupId = extractOneBotTargetId(session.guildId || session.channelId)
         if (groupId) {
-          await callOneBotApi(bot, 'send_group_forward_msg', { group_id: groupId, messages, message: messages })
+          await callMergedForward(bot, session, messages)
           return true
         }
       }

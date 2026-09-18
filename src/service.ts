@@ -225,6 +225,18 @@ export class EventService {
   }
 
   private async callOneBot(bot: any, action: string, params: any): Promise<any> {
+    const internal: any = bot?.internal
+    // adapter-onebot 的通用入口可以直接调用协议端实现的任意接口（含 NapCat 扩展接口），
+    // 因此 NapCat 与 LLOneBot 共用同一套 action 与参数。
+    if (typeof internal?._get === 'function') return await internal._get(action, params)
+    if (typeof internal?._request === 'function') {
+      const response = await internal._request(action, params)
+      if (response && typeof response === 'object' && 'retcode' in response) {
+        if (response.retcode === 0) return response.data
+        throw new Error(`OneBot ${action} failed: retcode=${response.retcode} ${response.message || response.wording || ''}`.trim())
+      }
+      return response
+    }
     const method = action.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
     const candidates = [
       bot?.[`$${action}`], bot?.[action], bot?.[method],

@@ -4,3 +4,8 @@ lib/
 .DS_Store
 *.log
 .env
+node_modules
+lib
+dist
+.vs
+tsconfig.tsbuildinfo
