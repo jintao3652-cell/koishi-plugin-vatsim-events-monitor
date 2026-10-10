@@ -74,7 +74,7 @@ export class Translator {
     this.log(`POST ${url} model=${body.model} input(${text.length})=${text.slice(0, 80).replace(/\n/g, ' ')}…`)
     try {
       const resp = await this.ctx.http.post(url, body, {
-        timeout: this.config.requestTimeout,
+        timeout: this.config.translateTimeout,
         headers: {
           Authorization: `Bearer ${this.config.nvidiaApiKey}`,
           Accept: 'application/json',

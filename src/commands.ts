@@ -30,6 +30,8 @@ async function sendEventList(
   }
   const botName = session.bot.user?.name || 'VATSIM Events'
   const botUin = String(session.selfId)
+  // 先起后台下载，渲染（含可能的翻译）过程中的等待可与下载重叠
+  service.prefetchBanners(events)
   const contents = await Promise.all(events.map(ev => service.renderCard(ev, translate)))
   const items = contents.map(content => ({ message: content as any, name: botName, uin: botUin }))
   const ok = await sendForwardItems(session, items, { mergedOnly: false })

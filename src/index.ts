@@ -7,7 +7,7 @@ import './types'
 
 export { Config }
 export const name = 'vatsim-events-monitor'
-export const inject = ['database', 'http']
+export const inject = ['database', 'http', 'puppeteer']
 
 export function apply(ctx: Context, config: Config) {
   defineModels(ctx)

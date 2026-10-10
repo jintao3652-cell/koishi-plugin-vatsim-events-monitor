@@ -4,7 +4,9 @@ import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
 import type { Config } from './config'
 import { EventApi } from './api'
+import { precacheRemoteImages } from './forward'
 import { Translator } from './translator'
+import { ensureBannerDownloader, type BannerSettings } from './banner'
 import type { NormalizedEvent, NotifyType, VatsimEvent, VatsimNotifyChannel, VatsimSubscription } from './types'
 
 dayjs.extend(utc)
@@ -20,6 +22,25 @@ export class EventService {
   constructor(private ctx: Context, private config: Config) {
     this.api = new EventApi(ctx, config)
     this.translator = new Translator(ctx, config)
+    // 注册横幅下载器（供 forward.ts 的 precacheRemoteImages 使用）
+    ensureBannerDownloader(ctx, () => this.bannerSettings())
+  }
+
+  private bannerSettings(): BannerSettings {
+    const c = this.config
+    return {
+      timeout: c.bannerTimeout,
+      retry: c.bannerRetry,
+      concurrency: c.bannerConcurrency,
+      maxWidth: c.bannerMaxWidth,
+      format: c.bannerFormat,
+      quality: c.bannerQuality,
+      cacheDays: c.bannerCacheDays,
+      maxBytes: 20 * 1024 * 1024,
+      browserFallback: c.bannerBrowserFallback,
+      browserTimeout: Math.max(c.bannerTimeout, 25000),
+      batchTimeout: c.bannerBatchTimeout,
+    }
   }
 
   async renderCard(ev: VatsimEvent, translate = false) {
@@ -80,6 +101,7 @@ export class EventService {
         if (result.isNew) newEvents.push(result.row)
       }
       this.vlog(`poll: ${newEvents.length} new`)
+      this.prefetchBanners(newEvents)
 
       for (const ev of newEvents) {
         await this.broadcastNew(ev)
@@ -94,6 +116,19 @@ export class EventService {
     } finally {
       this.polling = false
     }
+  }
+
+  /**
+   * 后台预热横幅。调用点：（1）轮询发现新活动；（2）查询类指令渲染前。
+   * 预热与实际发送共用同一批 Promise，渲染过程中的等待可与下载重叠，
+   * 真正走到 precacheRemoteImages 时通常已经完成。
+   */
+  prefetchBanners(events: { banner?: string }[]): void {
+    if (!this.config.bannerPrefetch) return
+    try {
+      const dl = ensureBannerDownloader(this.ctx, () => this.bannerSettings())
+      dl.prefetch(events.map(e => e.banner))
+    } catch { /* 预取失败不影响主流程 */ }
   }
 
   private vlog(msg: string) {
@@ -146,9 +181,12 @@ export class EventService {
     const now = Date.now()
     const intervalMs = this.config.pollInterval * 60_000
     const pending = await this.ctx.database.get('vatsim_event', { status: 'pending' })
+    if (!pending.length) return
+
+    const channels = await this.ctx.database.get('vatsim_notify_channel', { enableStart: true })
+    if (!channels.length) return
 
     for (const ev of pending) {
-      const channels = await this.ctx.database.get('vatsim_notify_channel', { enableStart: true })
       for (const ch of channels) {
         const minutes = (ch.remindMinutes?.length ? ch.remindMinutes : this.config.defaultRemindMinutes).map(Number)
         for (const m of minutes) {
@@ -334,6 +372,8 @@ export class EventService {
       eventId: ev.id, channelId: ch.channelId, type,
     })
     if (existed.length) return
+    // SnowLuma 适配：外链图片预下载转 base64（协议端对转发/普通消息里的远程媒体支持不稳）
+    try { content = await precacheRemoteImages(this.ctx, content) } catch { /* 保留原样 */ }
     await this.sendTo(ch.platform, ch.selfId, ch.channelId, ch.guildId, content, ev.id, type)
   }
 
