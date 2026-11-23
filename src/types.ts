@@ -63,6 +63,8 @@ export interface VatsimEvent {
   airports: string[]
   routes: RemoteRoute[]
   organisers: RemoteOrganiser[]
+  /** 命中的目标分部 ID（逗号分隔，如 "PRC,SEA"），空串表示不属于目标分部 */
+  divisionTags: string
   status: EventStatus
   createdAt: Date
   updatedAt: Date
@@ -100,11 +102,21 @@ export interface VatsimNotifyLog {
   sentAt: Date
 }
 
+/** 分部推送频道（由 vatsim.分部推送 指令自助登记） */
+export interface VatsimDivisionChannel {
+  platform: string
+  selfId: string
+  channelId: string
+  guildId: string
+  createdAt: Date
+}
+
 declare module 'koishi' {
   interface Tables {
     vatsim_event: VatsimEvent
     vatsim_subscription: VatsimSubscription
     vatsim_notify_channel: VatsimNotifyChannel
     vatsim_notify_log: VatsimNotifyLog
+    vatsim_division_channel: VatsimDivisionChannel
   }
 }

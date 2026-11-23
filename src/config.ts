@@ -22,6 +22,11 @@ export interface Config {
   verboseLog: boolean
   allowedChannels: string[]
   channelMode: 'whitelist' | 'all'
+  // 分部推送（PRC / 香港 / ROC）
+  divisionPushEnabled: boolean
+  divisionPushDivisions: string[]
+  seaIcaoPrefixes: string[]
+  vatsimDivisionApi: string
   // 活动横幅下载
   bannerTimeout: number
   bannerRetry: number
@@ -68,6 +73,18 @@ export const Config: Schema<Config> = Schema.object({
     .role('table')
     .default([])
     .description('允许推送的群聊 / 频道 id 列表（仅 whitelist 模式生效）。点 ➕ 添加一行，输入群号即可。OneBot QQ 群直接填群号，例如 123456789。'),
+  divisionPushEnabled: Schema.boolean().default(true)
+    .description('分部推送总开关：启用后，群内执行 vatsim.分部推送 的群会收到 PRC / 香港 / 澳门 / ROC 分部的活动（新活动、开始、结束）。'),
+  divisionPushDivisions: Schema.array(Schema.string())
+    .role('table')
+    .default(['PRC', 'SEA', 'ROC'])
+    .description('轮询的 VATSIM 分部 ID。PRC = 中国大陆，ROC = 台湾，SEA = 东南亚（仅保留下方 ICAO 前缀命中的香港 / 澳门活动）。VATSIM 没有独立的香港、澳门分部，其活动挂在 PRC / SEA 下。'),
+  seaIcaoPrefixes: Schema.array(Schema.string())
+    .role('table')
+    .default(['VH', 'VM'])
+    .description('SEA 分部内判定香港 / 澳门活动所用的机场 ICAO 前缀：VH = 香港（VHHH / VHHX），VM = 澳门（VMMC）。'),
+  vatsimDivisionApi: Schema.string().default('https://my.vatsim.net/api/v2/events/view/division')
+    .description('VATSIM 按分部查询活动的端点前缀，实际请求为 {前缀}/{divisionId}。'),
 
   bannerTimeout: Schema.number().default(20000).min(1000)
     .description('活动横幅单次下载超时（毫秒）。VATSIM 官方横幅多为 1~4MB 的 PNG，实测跨国直连需 4~14 秒，旧版固定 3 秒会 100% 超时。'),

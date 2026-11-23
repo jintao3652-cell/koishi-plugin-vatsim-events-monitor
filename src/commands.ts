@@ -10,9 +10,13 @@ const HELP = `📘 VATSIM 活动机器人使用说明（仅支持 OneBot 平台�
 • vatprc 活动查询          列出所有 VATPRC 即将进行的活动（合并转发）
 • vatsim 订阅              本频道订阅：新活动 / 开始前 30 分钟 / 结束 提醒
 • vatsim 取消订阅          关闭本频道订阅
+• vatsim 分部推送          本群订阅 PRC / 香港 / 澳门 / ROC 分部的新活动、开始、结束
+• vatsim 取消分部推送      关闭本群的分部推送
 • vatsim.model [id|-l]     查看/切换 NVIDIA 翻译模型，-l 列出可用模型
 
 提示：在最近活动 / 活动查询后加 -t 可启用 NVIDIA 翻译简介。
+分部推送覆盖 VATSIM 的 PRC（中国大陆）、ROC（台湾）分部，以及 SEA 分部中
+  机场 ICAO 以 VH（香港）或 VM（澳门）开头的活动（VATSIM 没有独立的香港、澳门分部）。
 推送范围：在 Koishi 控制台 → 插件配置 → vatsim-events-monitor 内
   - channelMode 选择 whitelist 或 all
   - allowedChannels 列表里点 ➕ 添加群号`
@@ -136,6 +140,34 @@ export function registerCommands(ctx: Context, service: EventService, config: Co
         userId: session.userId,
       })
       return '✅ 已取消你在本群的订阅。'
+    })
+
+  root.subcommand('.分部推送', '本群订阅 PRC / 香港 / 澳门 / ROC 分部活动推送')
+    .alias('vatsim.divisions')
+    .action(async ({ session }) => {
+      if (!session?.channelId) return '请在群内使用此指令。'
+      if (session.platform !== 'onebot') return '⚠️ 本插件仅支持 OneBot 平台。'
+      if (!config.divisionPushEnabled) return '⚠️ 分部推送已在插件配置中关闭（divisionPushEnabled）。'
+
+      await ctx.database.upsert('vatsim_division_channel', [{
+        platform: session.platform,
+        channelId: session.channelId,
+        selfId: session.selfId,
+        guildId: session.guildId || '',
+        createdAt: new Date(),
+      }])
+      return '✅ 已订阅分部推送：PRC（中国大陆）/ 香港 / 澳门（SEA 中 VH / VM 机场活动）/ ROC（台湾）的新活动、开始、结束都会推送到本群。'
+    })
+
+  root.subcommand('.取消分部推送', '取消本群的分部活动推送')
+    .alias('vatsim.divisions.off')
+    .action(async ({ session }) => {
+      if (!session?.channelId) return '请在群内使用。'
+      const removed = await ctx.database.remove('vatsim_division_channel', {
+        platform: session.platform,
+        channelId: session.channelId,
+      })
+      return removed ? '✅ 已取消本群的分部推送。' : '本群当前没有开启分部推送。'
     })
 
   root.subcommand('.model [id:string]', '查看/切换 NVIDIA 翻译模型')

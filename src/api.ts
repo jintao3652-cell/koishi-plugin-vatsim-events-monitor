@@ -68,6 +68,51 @@ export class EventApi {
     }
   }
 
+  /** 按分部查询当前与即将开始的活动：GET {vatsimDivisionApi}/{divisionId} */
+  async fetchDivision(divisionId: string): Promise<RemoteEvent[]> {
+    const url = `${this.config.vatsimDivisionApi}/${encodeURIComponent(divisionId)}`
+    const data = await this.fetchJson(url)
+    return data?.data ?? []
+  }
+
+  /**
+   * 拉取目标分部（默认 PRC / SEA / ROC）的活动，并按活动 ID 合并分部标签。
+   * SEA 分部没有独立的香港 / 澳门分部，因此只保留机场 / 航路起降机场以 VH（香港）或 VM（澳门）开头的活动。
+   */
+  async fetchDivisionMatches(): Promise<Map<string, { divisions: string[]; event: RemoteEvent }>> {
+    const result = new Map<string, { divisions: string[]; event: RemoteEvent }>()
+    if (!this.config.divisionPushEnabled) return result
+
+    const divisions = (this.config.divisionPushDivisions || []).map(d => String(d).toUpperCase()).filter(Boolean)
+    if (!divisions.length) return result
+    const seaPrefixes = (this.config.seaIcaoPrefixes || ['VH', 'VM'])
+      .map(p => String(p).toUpperCase())
+      .filter(Boolean)
+
+    const lists = await Promise.all(divisions.map(async (division) => {
+      try {
+        return { division, list: await this.fetchDivision(division) }
+      } catch (e: any) {
+        logger.warn(`division ${division} 拉取失败: ${e?.message || e}`)
+        return { division, list: [] as RemoteEvent[] }
+      }
+    }))
+
+    for (const { division, list } of lists) {
+      for (const ev of list) {
+        if (division === 'SEA' && !isIcaoPrefixEvent(ev, seaPrefixes)) continue
+        const key = String(ev.id)
+        const entry = result.get(key)
+        if (entry) {
+          if (!entry.divisions.includes(division)) entry.divisions.push(division)
+        } else {
+          result.set(key, { divisions: [division], event: ev })
+        }
+      }
+    }
+    return result
+  }
+
   async fetchAll(): Promise<NormalizedEvent[]> {
     const tasks: Promise<(NormalizedEvent | null)[]>[] = []
     if (this.config.sources.includes('vatsim')) {
@@ -87,6 +132,15 @@ export class EventApi {
     const results = await Promise.all(tasks)
     return results.flat().filter(Boolean)
   }
+}
+
+export function isIcaoPrefixEvent(ev: RemoteEvent, prefixes: string[]): boolean {
+  const startsWithAny = (v: any) => {
+    const icao = String(v ?? '').toUpperCase()
+    return prefixes.some(p => icao.startsWith(p))
+  }
+  if ((ev.airports ?? []).some(a => startsWithAny(typeof a === 'string' ? a : a?.icao))) return true
+  return (ev.routes ?? []).some(r => startsWithAny(r?.departure) || startsWithAny(r?.arrival))
 }
 
 export function normalize(e: any, source: EventSource): NormalizedEvent {

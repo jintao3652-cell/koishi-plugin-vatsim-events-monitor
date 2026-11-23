@@ -16,6 +16,7 @@ export function defineModels(ctx: Context) {
     airports: 'list',
     routes: 'json',
     organisers: 'json',
+    divisionTags: 'string',
     status: 'string',
     createdAt: 'timestamp',
     updatedAt: 'timestamp',
@@ -61,5 +62,15 @@ export function defineModels(ctx: Context) {
   }, {
     autoInc: true,
     unique: [['eventId', 'channelId', 'type']],
+  })
+
+  ctx.model.extend('vatsim_division_channel', {
+    platform: 'string',
+    selfId: 'string',
+    channelId: 'string',
+    guildId: 'string',
+    createdAt: 'timestamp',
+  }, {
+    primary: ['platform', 'channelId'],
   })
 }

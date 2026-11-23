@@ -3,11 +3,11 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
 import type { Config } from './config'
-import { EventApi } from './api'
+import { EventApi, normalize } from './api'
 import { precacheRemoteImages } from './forward'
 import { Translator } from './translator'
 import { ensureBannerDownloader, type BannerSettings } from './banner'
-import type { NormalizedEvent, NotifyType, VatsimEvent, VatsimNotifyChannel, VatsimSubscription } from './types'
+import type { NormalizedEvent, NotifyType, RemoteEvent, VatsimDivisionChannel, VatsimEvent, VatsimNotifyChannel, VatsimSubscription } from './types'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -100,6 +100,21 @@ export class EventService {
         const result = await this.upsert(ev)
         if (result.isNew) newEvents.push(result.row)
       }
+
+      // 分部端点只作分类：给活动打上 PRC / SEA(香港) / ROC 标签，供群组推送使用
+      if (this.config.divisionPushEnabled) {
+        const matches = await this.api.fetchDivisionMatches()
+        const { created, tagsByRemoteId } = await this.applyDivisionTags(matches)
+        for (const ev of newEvents) ev.divisionTags = tagsByRemoteId.get(ev.remoteId) ?? ''
+        const seen = new Set(newEvents.map(e => e.id))
+        for (const ev of created) {
+          if (!seen.has(ev.id)) {
+            seen.add(ev.id)
+            newEvents.push(ev)
+          }
+        }
+      }
+
       this.vlog(`poll: ${newEvents.length} new`)
       this.prefetchBanners(newEvents)
 
@@ -146,6 +161,7 @@ export class EventService {
       const status = ev.endTime < now ? 'ended' : ev.startTime <= now ? 'ongoing' : 'pending'
       const created = await this.ctx.database.create('vatsim_event', {
         ...ev,
+        divisionTags: '',
         status,
         createdAt: now,
         updatedAt: now,
@@ -175,6 +191,46 @@ export class EventService {
       })
     }
     return { isNew: false, row }
+  }
+
+  /**
+   * 用分部端点结果给活动打 divisionTags。
+   * - 标签只做并集，不收缩：避免某轮接口抖动导致标签丢失，影响后续开始/结束通知。
+   * - latest 未包含的活动会以 source='vatsim' 入库并计入新活动。
+   */
+  private async applyDivisionTags(
+    matches: Map<string, { divisions: string[]; event: RemoteEvent }>,
+  ): Promise<{ created: VatsimEvent[]; tagsByRemoteId: Map<string, string> }> {
+    const created: VatsimEvent[] = []
+    const tagsByRemoteId = new Map<string, string>()
+    for (const [remoteId, info] of matches) {
+      const tags = info.divisions.join(',')
+      const existing = await this.ctx.database.get('vatsim_event', { remoteId })
+      if (!existing.length) {
+        const ev = normalize(info.event, 'vatsim')
+        if (!ev) continue
+        const now = new Date()
+        const status = ev.endTime < now ? 'ended' : ev.startTime <= now ? 'ongoing' : 'pending'
+        const row = await this.ctx.database.create('vatsim_event', {
+          ...ev,
+          divisionTags: tags,
+          status,
+          createdAt: now,
+          updatedAt: now,
+        })
+        tagsByRemoteId.set(remoteId, tags)
+        if (status !== 'ended') created.push(row)
+        continue
+      }
+      const row = existing.find(r => r.source === 'vatsim') ?? existing[0]
+      const merged = mergeTags(row.divisionTags, tags)
+      tagsByRemoteId.set(remoteId, merged)
+      if (merged !== (row.divisionTags ?? '')) {
+        await this.ctx.database.set('vatsim_event', row.id, { divisionTags: merged })
+        row.divisionTags = merged
+      }
+    }
+    return { created, tagsByRemoteId }
   }
 
   private async checkReminders() {
@@ -215,6 +271,12 @@ export class EventService {
           const ats = await this.buildSubAts(ch.platform, ch.selfId, ch.channelId, ch.guildId)
           await this.sendIfNotLogged(ev, ch, 'start', this.renderStart(ev, ch, ats))
         }
+        if (this.config.divisionPushEnabled && ev.divisionTags) {
+          for (const dc of await this.ctx.database.get('vatsim_division_channel', {})) {
+            const ch = this.asDivisionNotifyChannel(dc)
+            await this.sendIfNotLogged(ev, ch, 'start', this.renderStart(ev, ch), { bypassWhitelist: true })
+          }
+        }
       }
     }
 
@@ -228,6 +290,12 @@ export class EventService {
         const channels = await this.ctx.database.get('vatsim_notify_channel', { enableEnd: true })
         for (const ch of channels) {
           await this.sendIfNotLogged(ev, ch, 'end', this.renderEnd(ev))
+        }
+        if (this.config.divisionPushEnabled && ev.divisionTags) {
+          for (const dc of await this.ctx.database.get('vatsim_division_channel', {})) {
+            const ch = this.asDivisionNotifyChannel(dc)
+            await this.sendIfNotLogged(ev, ch, 'end', this.renderEnd(ev), { bypassWhitelist: true })
+          }
         }
       }
     }
@@ -295,6 +363,12 @@ export class EventService {
       const msg = this.renderNew(ev, ats)
       await this.sendIfNotLogged(ev, ch, 'new', msg)
     }
+    // 目标分部（PRC / 香港 / ROC）的活动额外推送给自助订阅的群组
+    if (!this.config.divisionPushEnabled || !ev.divisionTags) return
+    for (const dc of await this.ctx.database.get('vatsim_division_channel', {})) {
+      const ch = this.asDivisionNotifyChannel(dc)
+      await this.sendIfNotLogged(ev, ch, 'new', this.renderNew(ev), { bypassWhitelist: true })
+    }
   }
 
   private renderNew(ev: VatsimEvent, ats: any[] = []) {
@@ -303,6 +377,7 @@ export class EventService {
     const orgList = asArray(ev.organisers).map((o: any) =>
       [o?.region, o?.division, o?.subdivision].filter(Boolean).join('→')
     ).filter(Boolean)
+    const divs = (ev.divisionTags || '').split(',').filter(Boolean)
     return h('message', {},
       ...ats, ats.length ? ' ' : '',
       `📢 有新的活动发布啦！\n`,
@@ -311,6 +386,7 @@ export class EventService {
       `🕐 ${this.fmt(ev.startTime)} - ${this.fmt(ev.endTime)}\n`,
       ev.airports.length ? `✈️ 机场: ${ev.airports.join(', ')}\n` : '',
       orgList.length ? `🏷️ 主办: ${orgList.join('；')}\n` : '',
+      divs.length ? `📌 分部: ${divs.join(' / ')}\n` : '',
       ev.link ? `🔗 ${ev.link}\n` : '',
       desc ? `\n📝 ${desc}${desc.length >= 200 ? '…' : ''}` : '',
     )
@@ -359,12 +435,15 @@ export class EventService {
     )
   }
 
-  private async sendIfNotLogged(ev: VatsimEvent, ch: VatsimNotifyChannel, type: NotifyType, content: any) {
+  private async sendIfNotLogged(
+    ev: VatsimEvent, ch: VatsimNotifyChannel, type: NotifyType, content: any,
+    opts: { bypassWhitelist?: boolean } = {},
+  ) {
     if (ch.platform !== 'onebot') {
       this.vlog(`skip ${type} ${ch.platform}:${ch.channelId}: non-onebot platform`)
       return
     }
-    if (!this.isChannelAllowed(ch.channelId, ch.guildId)) {
+    if (!opts.bypassWhitelist && !this.isChannelAllowed(ch.channelId, ch.guildId)) {
       this.vlog(`skip ${type} ${ch.channelId}: not in whitelist`)
       return
     }
@@ -375,6 +454,17 @@ export class EventService {
     // SnowLuma 适配：外链图片预下载转 base64（协议端对转发/普通消息里的远程媒体支持不稳）
     try { content = await precacheRemoteImages(this.ctx, content) } catch { /* 保留原样 */ }
     await this.sendTo(ch.platform, ch.selfId, ch.channelId, ch.guildId, content, ev.id, type)
+  }
+
+  private asDivisionNotifyChannel(ch: VatsimDivisionChannel): VatsimNotifyChannel {
+    return {
+      ...ch,
+      enableNew: true,
+      enableStart: true,
+      enableEnd: true,
+      remindMinutes: [],
+      atAll: false,
+    }
   }
 
   isChannelAllowed(channelId: string, guildId?: string): boolean {
@@ -440,6 +530,15 @@ export class EventService {
 
 function stripHtml(s: string) {
   return (s || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim()
+}
+
+function mergeTags(existing: string | null | undefined, next: string): string {
+  const set = new Set<string>()
+  for (const part of `${existing ?? ''},${next}`.split(',')) {
+    const value = part.trim()
+    if (value) set.add(value)
+  }
+  return [...set].join(',')
 }
 
 function asArray(v: any): any[] {
